@@ -35,19 +35,29 @@ function createRowProfiles(
   {
     horizontalBins = 24,
     horizontalSampleStep = 4,
+    horizontalMarginFraction = 0.06,
   } = {},
 ) {
   const { width, height, data } = imageData;
   const profiles = new Array(height);
+  const margin = Math.floor(width * horizontalMarginFraction);
+  const sampleStartX = Math.min(margin, width - 1);
+  const sampleEndX = Math.max(sampleStartX + 1, width - margin);
+  const sampleWidth = sampleEndX - sampleStartX;
 
   for (let row = 0; row < height; row += 1) {
     const profile = new Float32Array(horizontalBins);
     const counts = new Uint32Array(horizontalBins);
 
-    for (let x = 0; x < width; x += horizontalSampleStep) {
+    for (
+      let x = sampleStartX;
+      x < sampleEndX;
+      x += horizontalSampleStep
+    ) {
+      const normalizedX = (x - sampleStartX) / sampleWidth;
       const bin = Math.min(
         horizontalBins - 1,
-        Math.floor((x / width) * horizontalBins),
+        Math.floor(normalizedX * horizontalBins),
       );
 
       const pixelIndex = (row * width + x) * 4;
@@ -143,6 +153,29 @@ function estimateFixedEdgeRows(
 
 
 /* ==========================================
+   Central Search Regions
+========================================== */
+
+function resolveSearchRegion(
+  height,
+  {
+    verticalTopFraction = 0.15,
+    verticalBottomFraction = 0.15,
+  } = {},
+) {
+  const startRow = Math.floor(height * verticalTopFraction);
+  const endRow = Math.ceil(
+    height * (1 - verticalBottomFraction),
+  );
+
+  return {
+    startRow,
+    endRow: Math.max(startRow + 1, endRow),
+  };
+}
+
+
+/* ==========================================
    Pairwise Overlap Detection
 ========================================== */
 
@@ -150,32 +183,38 @@ function findApproximateVerticalMatch(
   firstProfiles,
   secondProfiles,
   {
-    firstContentStart,
-    firstContentEnd,
-    secondContentStart,
-    secondContentEnd,
     minimumOverlapRows = 128,
     verticalSampleStep = 4,
-  },
+    verticalTopFraction = 0.15,
+    verticalBottomFraction = 0.15,
+  } = {},
 ) {
+  const firstSearchRegion = resolveSearchRegion(
+    firstProfiles.length,
+    { verticalTopFraction, verticalBottomFraction },
+  );
+  const secondSearchRegion = resolveSearchRegion(
+    secondProfiles.length,
+    { verticalTopFraction, verticalBottomFraction },
+  );
+
   let best = null;
 
   const maximumOffset = Math.max(
     1,
-    firstContentEnd - firstContentStart - minimumOverlapRows,
+    firstProfiles.length - minimumOverlapRows,
   );
 
   for (let offset = 1; offset <= maximumOffset; offset += 1) {
-    const firstStart = Math.max(
-      firstContentStart,
-      secondContentStart + offset,
+    const secondMatchStart = Math.max(
+      secondSearchRegion.startRow,
+      firstSearchRegion.startRow - offset,
     );
-    const secondStart = firstStart - offset;
-
-    const rowCount = Math.min(
-      firstContentEnd - firstStart,
-      secondContentEnd - secondStart,
+    const secondMatchEnd = Math.min(
+      secondSearchRegion.endRow,
+      firstSearchRegion.endRow - offset,
     );
+    const rowCount = secondMatchEnd - secondMatchStart;
 
     if (rowCount < minimumOverlapRows) {
       continue;
@@ -185,13 +224,15 @@ function findApproximateVerticalMatch(
     let sampleCount = 0;
 
     for (
-      let relativeRow = 0;
-      relativeRow < rowCount;
-      relativeRow += verticalSampleStep
+      let secondRow = secondMatchStart;
+      secondRow < secondMatchEnd;
+      secondRow += verticalSampleStep
     ) {
+      const firstRow = secondRow + offset;
+
       similarityTotal += calculateProfileSimilarity(
-        firstProfiles[firstStart + relativeRow],
-        secondProfiles[secondStart + relativeRow],
+        firstProfiles[firstRow],
+        secondProfiles[secondRow],
       );
       sampleCount += 1;
     }
@@ -204,12 +245,29 @@ function findApproximateVerticalMatch(
       best === null ||
       averageSimilarity > best.averageSimilarity
     ) {
+      const secondSeamRow = secondMatchStart + Math.floor(rowCount / 2);
+      const firstSeamRow = secondSeamRow + offset;
+
       best = {
-        firstStartRow: firstStart,
-        secondStartRow: secondStart,
-        rowCount,
         verticalOffset: offset,
+        rowCount,
         averageSimilarity,
+        seam: {
+          firstRow: firstSeamRow,
+          secondRow: secondSeamRow,
+        },
+        matchedRegion: {
+          firstStartRow: secondMatchStart + offset,
+          firstEndRow: secondMatchEnd + offset,
+          secondStartRow: secondMatchStart,
+          secondEndRow: secondMatchEnd,
+        },
+        searchRegion: {
+          firstStartRow: firstSearchRegion.startRow,
+          firstEndRow: firstSearchRegion.endRow,
+          secondStartRow: secondSearchRegion.startRow,
+          secondEndRow: secondSearchRegion.endRow,
+        },
       };
     }
   }
@@ -223,6 +281,8 @@ function analyzePair(
   {
     minimumApproximateOverlapRows = 128,
     minimumApproximateSimilarity = 0.96,
+    verticalTopFraction = 0.15,
+    verticalBottomFraction = 0.15,
   } = {},
 ) {
   const fixedTop = estimateFixedEdgeRows(
@@ -236,26 +296,13 @@ function analyzePair(
     { edge: "bottom" },
   );
 
-  const firstContentStart = fixedTop.rows;
-  const secondContentStart = fixedTop.rows;
-  const firstContentEnd = Math.max(
-    firstContentStart,
-    firstProfiles.length - fixedBottom.rows,
-  );
-  const secondContentEnd = Math.max(
-    secondContentStart,
-    secondProfiles.length - fixedBottom.rows,
-  );
-
   const match = findApproximateVerticalMatch(
     firstProfiles,
     secondProfiles,
     {
-      firstContentStart,
-      firstContentEnd,
-      secondContentStart,
-      secondContentEnd,
       minimumOverlapRows: minimumApproximateOverlapRows,
+      verticalTopFraction,
+      verticalBottomFraction,
     },
   );
 
@@ -267,16 +314,10 @@ function analyzePair(
   }
 
   return {
-    matchMode: "approximate",
+    matchMode: "central_region_approximate",
     ...match,
     fixedTop,
     fixedBottom,
-    contentRegion: {
-      firstStartRow: firstContentStart,
-      firstEndRow: firstContentEnd,
-      secondStartRow: secondContentStart,
-      secondEndRow: secondContentEnd,
-    },
   };
 }
 
@@ -306,13 +347,13 @@ function buildSegments(bitmaps, pairMatches) {
 
     if (role === "first") {
       sourceStartRow = 0;
-      sourceEndRow = pairMatches[0].firstStartRow;
+      sourceEndRow = pairMatches[0].seam.firstRow;
     } else if (role === "last") {
-      sourceStartRow = pairMatches[index - 1].secondStartRow;
+      sourceStartRow = pairMatches[index - 1].seam.secondRow;
       sourceEndRow = bitmap.height;
     } else {
-      sourceStartRow = pairMatches[index - 1].secondStartRow;
-      sourceEndRow = pairMatches[index].firstStartRow;
+      sourceStartRow = pairMatches[index - 1].seam.secondRow;
+      sourceEndRow = pairMatches[index].seam.firstRow;
     }
 
     if (sourceEndRow <= sourceStartRow) {
