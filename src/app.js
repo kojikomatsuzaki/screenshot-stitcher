@@ -148,7 +148,7 @@ async function handleStitch() {
       firstBitmap,
       secondBitmap,
       {
-        minimumOverlapRows: 16,
+        minimumOverlapRows: 32,
       },
     );
 
