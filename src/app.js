@@ -1,5 +1,6 @@
 import {
   decodeImageFile,
+  diagnoseImagePair,
   stitchTwoImages,
 } from "./stitch-core.js";
 
@@ -17,12 +18,6 @@ import {
 /* ==========================================
    Application State
 ========================================== */
-
-/*
- * The first version keeps state intentionally small and local.
- * If more filters or reorderable inputs are added later, this object can
- * become the boundary between the UI and a richer processing pipeline.
- */
 
 const applicationState = {
   selectedFiles: [],
@@ -86,6 +81,31 @@ function setProcessingState(isProcessing) {
   elements.outputFileName.disabled = isProcessing;
 }
 
+function formatMatch(match) {
+  if (!match) {
+    return "none";
+  }
+
+  return [
+    `${match.rowCount} rows`,
+    `firstStart=${match.firstStartRow}`,
+    `secondStart=${match.secondStartRow}`,
+    `offset=${match.verticalOffset}`,
+  ].join(", ");
+}
+
+function formatDiagnosticReport(diagnostics) {
+  return [
+    "[debug] exact-overlap diagnostics",
+    `image 1: ${diagnostics.firstWidth} × ${diagnostics.firstHeight}`,
+    `image 2: ${diagnostics.secondWidth} × ${diagnostics.secondHeight}`,
+    `minimum overlap: ${diagnostics.minimumOverlapRows} rows`,
+    `matching row pairs: ${diagnostics.matchingRowPairs}`,
+    `best match (any geometry): ${formatMatch(diagnostics.bestAny)}`,
+    `best match (positive offset): ${formatMatch(diagnostics.bestPositiveOffset)}`,
+  ].join("\n");
+}
+
 
 /* ==========================================
    File Naming
@@ -114,10 +134,6 @@ function downloadBlob(blob, fileName) {
   anchor.click();
   anchor.remove();
 
-  /*
-   * Revocation is delayed by one event-loop turn because some mobile
-   * browsers need the object URL to remain alive until download dispatch.
-   */
   setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
@@ -188,8 +204,24 @@ async function handleStitch() {
 
     if (error.message === "WIDTH_MISMATCH") {
       elements.processStatus.textContent = t("widthMismatch");
-    } else if (error.message === "OVERLAP_NOT_FOUND") {
-      elements.processStatus.textContent = t("overlapNotFound");
+    } else if (
+      error.message === "OVERLAP_NOT_FOUND" &&
+      firstBitmap &&
+      secondBitmap
+    ) {
+      const diagnostics = diagnoseImagePair(
+        firstBitmap,
+        secondBitmap,
+        {
+          minimumOverlapRows: 32,
+        },
+      );
+
+      elements.processStatus.textContent = [
+        t("overlapNotFound"),
+        "",
+        formatDiagnosticReport(diagnostics),
+      ].join("\n");
     } else {
       elements.processStatus.textContent = t("failed");
     }
