@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#ffffff">
   <title>Screenshot Stitcher</title>
-  <link rel="stylesheet" href="./style.css?v=0.2.1">
+  <link rel="stylesheet" href="./style.css?v=0.2.2">
 </head>
 <body>
   <main class="app-shell">
@@ -13,7 +13,7 @@
       <h1 id="app-title">Screenshot Stitcher</h1>
       <p id="app-description" class="app-description"></p>
       <p class="status-text" aria-label="debug build version">
-        Debug build: 0.2.1 / 2026-09-12 14:16 JST
+        Debug build: 0.2.2 / 2026-09-12 14:42 JST
       </p>
     </header>
 
@@ -43,10 +43,15 @@
       <button id="stitch-button" type="button" class="primary-control"></button>
       <button id="reset-button" type="button" class="secondary-control"></button>
 
+      <div id="download-controls" hidden>
+        <button id="download-png-button" type="button" class="primary-control"></button>
+        <button id="download-yaml-button" type="button" class="secondary-control"></button>
+      </div>
+
       <p id="process-status" class="status-text" aria-live="polite"></p>
     </section>
   </main>
 
-  <script type="module" src="./src/app.js?v=0.2.1"></script>
+  <script type="module" src="./src/app.js?v=0.2.2"></script>
 </body>
 </html>
