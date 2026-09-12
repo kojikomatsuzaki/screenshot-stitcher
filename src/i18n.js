@@ -2,12 +2,6 @@
    Locale Catalog
 ========================================== */
 
-/*
- * UI strings live outside app.js so presentation language can grow
- * without coupling translation work to image-processing behavior.
- * No external i18n library is needed for a small mobile interface.
- */
-
 const messageCatalog = {
   en: {
     appTitle: "Screenshot Stitcher",
@@ -20,12 +14,12 @@ const messageCatalog = {
     saveYaml: "Save YAML",
     noFilesSelected: "No files selected.",
     selectedFiles: (count) => `${count} file(s) selected.`,
-    needExactlyTwoFiles: "For this first version, select exactly two images.",
-    processing: "Finding overlap…",
-    widthMismatch: "The two images must have the same pixel width.",
-    overlapNotFound: "No usable vertical overlap was found.",
-    overlapFound: (rows) => `Overlap: ${rows} row(s). Creating PNG…`,
-    complete: "PNG and YAML were created. Save each file with the buttons below.",
+    needAtLeastTwoFiles: "Select at least two images.",
+    processing: "Finding overlapping content…",
+    widthMismatch: "All images must have the same pixel width.",
+    overlapNotFound: "No acceptable vertical overlap was found between one or more adjacent images.",
+    invalidGeometry: "The detected overlaps produced an invalid middle-image segment.",
+    complete: "PNG and YAML were created.",
     failed: "Processing failed.",
   },
 
@@ -40,12 +34,12 @@ const messageCatalog = {
     saveYaml: "YAMLを保存",
     noFilesSelected: "ファイルは選択されていません。",
     selectedFiles: (count) => `${count}個のファイルを選択しました。`,
-    needExactlyTwoFiles: "最初の版では、画像を2枚ちょうど選択してください。",
-    processing: "重複部分を検出しています…",
-    widthMismatch: "2枚の画像は同じ画素幅である必要があります。",
-    overlapNotFound: "利用できる縦方向の重複部分を検出できませんでした。",
-    overlapFound: (rows) => `重複部分を${rows}行検出しました。PNGを生成しています…`,
-    complete: "PNGとYAMLを生成しました。下のボタンからそれぞれ保存してください。",
+    needAtLeastTwoFiles: "画像を2枚以上選択してください。",
+    processing: "隣接画像の重複部分を検出しています…",
+    widthMismatch: "すべての画像は同じ画素幅である必要があります。",
+    overlapNotFound: "隣接する画像のどこかで、採用可能な縦方向の重複を検出できませんでした。",
+    invalidGeometry: "検出した重複関係から途中画像の有効な範囲を作れませんでした。",
+    complete: "PNGとYAMLを生成しました。",
     failed: "処理に失敗しました。",
   },
 };
@@ -54,11 +48,6 @@ const messageCatalog = {
 /* ==========================================
    Locale Resolution
 ========================================== */
-
-/*
- * navigator.languages is preferred because it preserves the user's
- * language priority rather than assuming one fixed browser language.
- */
 
 export function resolveLocale() {
   const requestedLanguages = navigator.languages ?? [navigator.language];
