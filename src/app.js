@@ -1,7 +1,6 @@
 import {
   decodeImageFile,
-  diagnoseImagePair,
-  stitchTwoImages,
+  stitchImages,
 } from "./stitch-core.js";
 
 import {
@@ -31,7 +30,6 @@ const applicationState = {
 ========================================== */
 
 const stitchSettings = {
-  minimumOverlapRows: 32,
   minimumApproximateOverlapRows: 128,
   minimumApproximateSimilarity: 0.96,
 };
@@ -83,10 +81,9 @@ function applyLocalizedText() {
 function updateSelectedFilesStatus() {
   const count = applicationState.selectedFiles.length;
 
-  elements.selectedFilesStatus.textContent =
-    count === 0
-      ? t("noFilesSelected")
-      : t("selectedFiles", count);
+  elements.selectedFilesStatus.textContent = count === 0
+    ? t("noFilesSelected")
+    : t("selectedFiles", count);
 }
 
 function setProcessingState(isProcessing) {
@@ -102,51 +99,31 @@ function formatPercentage(value) {
   return `${(value * 100).toFixed(2)}%`;
 }
 
-function formatMatch(match) {
-  if (!match) {
-    return "none";
-  }
-
-  const parts = [
-    `${match.rowCount} rows`,
-    `firstStart=${match.firstStartRow}`,
-    `secondStart=${match.secondStartRow}`,
-    `offset=${match.verticalOffset}`,
-  ];
-
-  if (typeof match.averageSimilarity === "number") {
-    parts.push(
-      `similarity=${formatPercentage(match.averageSimilarity)}`,
-    );
-  }
-
-  return parts.join(", ");
-}
-
 function formatDiagnosticReport(diagnostics) {
+  const imageLines = diagnostics.images.flatMap((image) => [
+    `image ${image.index + 1}: role=${image.role}, ${image.width} × ${image.height}`,
+    `  keep y=${image.segment.sourceStartRow}–${image.segment.sourceEndRow} (${image.segment.rowCount} rows)`,
+  ]);
+
+  const pairLines = diagnostics.pairMatches.flatMap((pair, index) => [
+    `pair ${index + 1}→${index + 2}:`,
+    `  overlap=${pair.rowCount} rows, similarity=${formatPercentage(pair.averageSimilarity)}`,
+    `  firstStart=${pair.firstStartRow}, secondStart=${pair.secondStartRow}`,
+    `  fixed top=${pair.fixedTop.rows}, fixed bottom=${pair.fixedBottom.rows}`,
+  ]);
+
   return [
-    "[debug] screenshot structure diagnostics",
-    `image 1: ${diagnostics.firstWidth} × ${diagnostics.firstHeight}`,
-    `image 2: ${diagnostics.secondWidth} × ${diagnostics.secondHeight}`,
+    "[debug] role-aware screenshot diagnostics",
+    `images: ${diagnostics.imageCount}`,
     "",
-    "fixed UI candidates:",
-    `  top: ${diagnostics.fixedTop.rows} rows, similarity=${formatPercentage(diagnostics.fixedTop.averageSimilarity)}`,
-    `  bottom: ${diagnostics.fixedBottom.rows} rows, similarity=${formatPercentage(diagnostics.fixedBottom.averageSimilarity)}`,
+    "image roles / retained segments:",
+    ...imageLines,
     "",
-    "content search region:",
-    `  image 1: y=${diagnostics.contentRegion.firstStartRow}–${diagnostics.contentRegion.firstEndRow}`,
-    `  image 2: y=${diagnostics.contentRegion.secondStartRow}–${diagnostics.contentRegion.secondEndRow}`,
+    "pairwise overlap:",
+    ...pairLines,
     "",
-    "exact matching:",
-    `  minimum overlap: ${diagnostics.minimumOverlapRows} rows`,
-    `  matching row pairs: ${diagnostics.matchingRowPairs}`,
-    `  best (any geometry): ${formatMatch(diagnostics.bestAny)}`,
-    `  best (positive offset): ${formatMatch(diagnostics.bestPositiveOffset)}`,
-    "",
-    "approximate matching after fixed-UI exclusion:",
-    `  minimum overlap: ${diagnostics.minimumApproximateOverlapRows} rows`,
-    `  acceptance similarity: ${formatPercentage(stitchSettings.minimumApproximateSimilarity)}`,
-    `  best: ${formatMatch(diagnostics.approximateMatch)}`,
+    `minimum overlap: ${stitchSettings.minimumApproximateOverlapRows} rows`,
+    `acceptance similarity: ${formatPercentage(stitchSettings.minimumApproximateSimilarity)}`,
   ].join("\n");
 }
 
@@ -166,12 +143,6 @@ function normalizeBaseFileName(rawValue) {
 /* ==========================================
    Browser Downloads
 ========================================== */
-
-/*
- * iOS Safari can suppress or reorder multiple synthetic downloads started
- * after asynchronous processing. Generated files are therefore kept in
- * memory and downloaded one at a time from an explicit user tap.
- */
 
 function downloadBlob(blob, fileName) {
   const objectUrl = URL.createObjectURL(blob);
@@ -209,8 +180,8 @@ function showGeneratedFiles({ pngBlob, pngFileName, yamlBlob, yamlFileName }) {
 ========================================== */
 
 async function handleStitch() {
-  if (applicationState.selectedFiles.length !== 2) {
-    elements.processStatus.textContent = t("needExactlyTwoFiles");
+  if (applicationState.selectedFiles.length < 2) {
+    elements.processStatus.textContent = t("needAtLeastTwoFiles");
     return;
   }
 
@@ -218,49 +189,28 @@ async function handleStitch() {
   setProcessingState(true);
   elements.processStatus.textContent = t("processing");
 
-  const [firstFile, secondFile] = applicationState.selectedFiles;
-
-  let firstBitmap;
-  let secondBitmap;
-  let diagnostics;
+  const bitmaps = [];
 
   try {
-    firstBitmap = await decodeImageFile(firstFile);
-    secondBitmap = await decodeImageFile(secondFile);
+    for (const file of applicationState.selectedFiles) {
+      bitmaps.push(await decodeImageFile(file));
+    }
 
-    diagnostics = diagnoseImagePair(
-      firstBitmap,
-      secondBitmap,
-      stitchSettings,
+    const result = await stitchImages(bitmaps, stitchSettings);
+
+    const baseFileName = normalizeBaseFileName(
+      elements.outputFileName.value,
     );
-
-    const result = await stitchTwoImages(
-      firstBitmap,
-      secondBitmap,
-      stitchSettings,
-    );
-
-    const baseFileName =
-      normalizeBaseFileName(elements.outputFileName.value);
-
     const pngFileName = `${baseFileName}.png`;
     const yamlFileName = `${baseFileName}.yaml`;
-
-    const sha256 =
-      await calculateSha256Hex(result.pngBlob);
+    const sha256 = await calculateSha256Hex(result.pngBlob);
 
     const yamlText = createSidecarYaml({
       outputFileName: pngFileName,
       sha256,
       outputWidth: result.outputWidth,
       outputHeight: result.outputHeight,
-      matchMode: result.matchMode,
-      overlapRows: result.overlapRows,
-      averageSimilarity: result.averageSimilarity,
-      firstMatchStartRow: result.firstMatchStartRow,
-      secondMatchStartRow: result.secondMatchStartRow,
-      firstSpliceRow: result.firstSpliceRow,
-      secondSpliceRow: result.secondSpliceRow,
+      diagnostics: result.diagnostics,
       sourceFiles: applicationState.selectedFiles,
     });
 
@@ -275,41 +225,28 @@ async function handleStitch() {
       yamlFileName,
     });
 
-    const matchDescription =
-      result.matchMode === "exact"
-        ? `exact overlap used: ${result.overlapRows} rows`
-        : [
-            `approximate overlap used: ${result.overlapRows} rows`,
-            `similarity: ${formatPercentage(result.averageSimilarity)}`,
-            `splice: image1 y=${result.firstSpliceRow}, image2 y=${result.secondSpliceRow}`,
-          ].join("\n");
-
     elements.processStatus.textContent = [
       t("complete"),
-      matchDescription,
       "",
-      formatDiagnosticReport(diagnostics),
+      formatDiagnosticReport(result.diagnostics),
     ].join("\n");
   } catch (error) {
     console.error(error);
 
     if (error.message === "WIDTH_MISMATCH") {
       elements.processStatus.textContent = t("widthMismatch");
-    } else if (
-      error.message === "OVERLAP_NOT_FOUND" &&
-      diagnostics
-    ) {
-      elements.processStatus.textContent = [
-        t("overlapNotFound"),
-        "",
-        formatDiagnosticReport(diagnostics),
-      ].join("\n");
+    } else if (error.message === "OVERLAP_NOT_FOUND") {
+      elements.processStatus.textContent = t("overlapNotFound");
+    } else if (error.message === "INVALID_SEGMENT_GEOMETRY") {
+      elements.processStatus.textContent = t("invalidGeometry");
     } else {
       elements.processStatus.textContent = t("failed");
     }
   } finally {
-    firstBitmap?.close();
-    secondBitmap?.close();
+    for (const bitmap of bitmaps) {
+      bitmap.close();
+    }
+
     setProcessingState(false);
   }
 }
@@ -340,8 +277,9 @@ elements.selectFilesButton.addEventListener("click", () => {
 });
 
 elements.fileInput.addEventListener("change", () => {
-  applicationState.selectedFiles =
-    Array.from(elements.fileInput.files ?? []);
+  applicationState.selectedFiles = Array.from(
+    elements.fileInput.files ?? [],
+  );
 
   clearGeneratedFiles();
   elements.processStatus.textContent = "";
@@ -354,27 +292,17 @@ elements.resetButton.addEventListener("click", resetApplication);
 elements.downloadPngButton.addEventListener("click", () => {
   const generatedFiles = applicationState.generatedFiles;
 
-  if (!generatedFiles) {
-    return;
+  if (generatedFiles) {
+    downloadBlob(generatedFiles.pngBlob, generatedFiles.pngFileName);
   }
-
-  downloadBlob(
-    generatedFiles.pngBlob,
-    generatedFiles.pngFileName,
-  );
 });
 
 elements.downloadYamlButton.addEventListener("click", () => {
   const generatedFiles = applicationState.generatedFiles;
 
-  if (!generatedFiles) {
-    return;
+  if (generatedFiles) {
+    downloadBlob(generatedFiles.yamlBlob, generatedFiles.yamlFileName);
   }
-
-  downloadBlob(
-    generatedFiles.yamlBlob,
-    generatedFiles.yamlFileName,
-  );
 });
 
 
