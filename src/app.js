@@ -26,6 +26,24 @@ const applicationState = {
 
 
 /* ==========================================
+   Stitch Settings
+========================================== */
+
+/*
+ * These values are intentionally simple while the detector is being tuned
+ * against real screenshots. Exact matching remains the first choice. When it
+ * fails, approximate matching is accepted only when both the overlap length
+ * and the average similarity clear these thresholds.
+ */
+
+const stitchSettings = {
+  minimumOverlapRows: 32,
+  minimumApproximateOverlapRows: 128,
+  minimumApproximateSimilarity: 0.96,
+};
+
+
+/* ==========================================
    DOM References
 ========================================== */
 
@@ -127,6 +145,8 @@ function formatDiagnosticReport(diagnostics) {
     `  best (positive offset): ${formatMatch(diagnostics.bestPositiveOffset)}`,
     "",
     "approximate matching after fixed-UI exclusion:",
+    `  minimum overlap: ${diagnostics.minimumApproximateOverlapRows} rows`,
+    `  acceptance similarity: ${formatPercentage(stitchSettings.minimumApproximateSimilarity)}`,
     `  best: ${formatMatch(diagnostics.approximateMatch)}`,
   ].join("\n");
 }
@@ -189,17 +209,13 @@ async function handleStitch() {
     diagnostics = diagnoseImagePair(
       firstBitmap,
       secondBitmap,
-      {
-        minimumOverlapRows: 32,
-      },
+      stitchSettings,
     );
 
     const result = await stitchTwoImages(
       firstBitmap,
       secondBitmap,
-      {
-        minimumOverlapRows: 32,
-      },
+      stitchSettings,
     );
 
     const baseFileName =
@@ -216,7 +232,13 @@ async function handleStitch() {
       sha256,
       outputWidth: result.outputWidth,
       outputHeight: result.outputHeight,
+      matchMode: result.matchMode,
       overlapRows: result.overlapRows,
+      averageSimilarity: result.averageSimilarity,
+      firstMatchStartRow: result.firstMatchStartRow,
+      secondMatchStartRow: result.secondMatchStartRow,
+      firstSpliceRow: result.firstSpliceRow,
+      secondSpliceRow: result.secondSpliceRow,
       sourceFiles: applicationState.selectedFiles,
     });
 
@@ -229,9 +251,18 @@ async function handleStitch() {
       yamlFileName,
     );
 
+    const matchDescription =
+      result.matchMode === "exact"
+        ? `exact overlap used: ${result.overlapRows} rows`
+        : [
+            `approximate overlap used: ${result.overlapRows} rows`,
+            `similarity: ${formatPercentage(result.averageSimilarity)}`,
+            `splice: image1 y=${result.firstSpliceRow}, image2 y=${result.secondSpliceRow}`,
+          ].join("\n");
+
     elements.processStatus.textContent = [
       t("complete"),
-      `exact overlap used: ${result.overlapRows} rows`,
+      matchDescription,
       "",
       formatDiagnosticReport(diagnostics),
     ].join("\n");
