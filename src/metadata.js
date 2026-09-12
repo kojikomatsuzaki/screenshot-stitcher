@@ -32,12 +32,22 @@ function quoteYamlString(value) {
   return JSON.stringify(String(value));
 }
 
+function formatOptionalNumber(value) {
+  return Number.isFinite(value) ? String(value) : "null";
+}
+
 export function createSidecarYaml({
   outputFileName,
   sha256,
   outputWidth,
   outputHeight,
+  matchMode,
   overlapRows,
+  averageSimilarity,
+  firstMatchStartRow,
+  secondMatchStartRow,
+  firstSpliceRow,
+  secondSpliceRow,
   sourceFiles,
 }) {
   const sourceLines = sourceFiles
@@ -52,13 +62,18 @@ export function createSidecarYaml({
     "schema_version: 1",
     "generator:",
     '  name: "screenshot-stitcher"',
-    '  version: "0.1.0"',
+    '  version: "0.2.0"',
     "processing:",
-    '  mode: "exact_vertical_overlap"',
+    `  mode: ${quoteYamlString(`${matchMode}_vertical_overlap`)}`,
     "  resampling: false",
     "  interpolation: false",
     "  generated_pixels: false",
     `  overlap_rows: ${overlapRows}`,
+    `  similarity: ${formatOptionalNumber(averageSimilarity)}`,
+    `  first_match_start_row: ${firstMatchStartRow}`,
+    `  second_match_start_row: ${secondMatchStartRow}`,
+    `  first_splice_row: ${firstSpliceRow}`,
+    `  second_splice_row: ${secondSpliceRow}`,
     "output:",
     `  file_name: ${quoteYamlString(outputFileName)}`,
     '  media_type: "image/png"',
