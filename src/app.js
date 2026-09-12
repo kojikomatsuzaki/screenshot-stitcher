@@ -32,6 +32,8 @@ const applicationState = {
 const stitchSettings = {
   minimumApproximateOverlapRows: 128,
   minimumApproximateSimilarity: 0.96,
+  verticalTopFraction: 0.15,
+  verticalBottomFraction: 0.15,
 };
 
 
@@ -107,13 +109,18 @@ function formatDiagnosticReport(diagnostics) {
 
   const pairLines = diagnostics.pairMatches.flatMap((pair, index) => [
     `pair ${index + 1}→${index + 2}:`,
-    `  overlap=${pair.rowCount} rows, similarity=${formatPercentage(pair.averageSimilarity)}`,
-    `  firstStart=${pair.firstStartRow}, secondStart=${pair.secondStartRow}`,
-    `  fixed top=${pair.fixedTop.rows}, fixed bottom=${pair.fixedBottom.rows}`,
+    `  scroll offset=${pair.verticalOffset} rows`,
+    `  matched=${pair.rowCount} rows, similarity=${formatPercentage(pair.averageSimilarity)}`,
+    `  seam first=${pair.seam.firstRow}, second=${pair.seam.secondRow}`,
+    `  matched first=${pair.matchedRegion.firstStartRow}–${pair.matchedRegion.firstEndRow}`,
+    `  matched second=${pair.matchedRegion.secondStartRow}–${pair.matchedRegion.secondEndRow}`,
+    `  search first=${pair.searchRegion.firstStartRow}–${pair.searchRegion.firstEndRow}`,
+    `  search second=${pair.searchRegion.secondStartRow}–${pair.searchRegion.secondEndRow}`,
+    `  fixed-edge diagnostics: top=${pair.fixedTop.rows}, bottom=${pair.fixedBottom.rows}`,
   ]);
 
   return [
-    "[debug] role-aware screenshot diagnostics",
+    "[debug] central-region screenshot diagnostics",
     `images: ${diagnostics.imageCount}`,
     "",
     "image roles / retained segments:",
@@ -124,6 +131,7 @@ function formatDiagnosticReport(diagnostics) {
     "",
     `minimum overlap: ${stitchSettings.minimumApproximateOverlapRows} rows`,
     `acceptance similarity: ${formatPercentage(stitchSettings.minimumApproximateSimilarity)}`,
+    `search vertical region: ${(stitchSettings.verticalTopFraction * 100).toFixed(0)}%–${((1 - stitchSettings.verticalBottomFraction) * 100).toFixed(0)}%`,
   ].join("\n");
 }
 
