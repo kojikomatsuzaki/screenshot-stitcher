@@ -22,51 +22,13 @@ function createImageDataFromBitmap(bitmap) {
   });
 
   context.drawImage(bitmap, 0, 0);
-
   return context.getImageData(0, 0, bitmap.width, bitmap.height);
-}
-
-
-/* ==========================================
-   Row Fingerprints
-========================================== */
-
-function createRowFingerprints(imageData) {
-  const { width, height, data } = imageData;
-  const bytesPerRow = width * 4;
-  const fingerprints = new Uint32Array(height);
-
-  for (let row = 0; row < height; row += 1) {
-    const rowStart = row * bytesPerRow;
-    const rowEnd = rowStart + bytesPerRow;
-
-    let hash = 0x811c9dc5;
-
-    for (let index = rowStart; index < rowEnd; index += 1) {
-      hash ^= data[index];
-      hash = Math.imul(hash, 0x01000193);
-    }
-
-    fingerprints[row] = hash >>> 0;
-  }
-
-  return fingerprints;
 }
 
 
 /* ==========================================
    Approximate Row Profiles
 ========================================== */
-
-/*
- * Screenshots that look identical to a person are not always pixel-identical.
- * Text antialiasing, WebView rendering, dynamic status information and other
- * small changes can make exact matching fail.
- *
- * Each row is therefore reduced to a small luminance profile. The profile is
- * deliberately coarse: it keeps the broad structure of the row while
- * ignoring tiny pixel-level differences.
- */
 
 function createRowProfiles(
   imageData,
@@ -92,7 +54,6 @@ function createRowProfiles(
       const red = data[pixelIndex];
       const green = data[pixelIndex + 1];
       const blue = data[pixelIndex + 2];
-
       const luminance =
         (0.2126 * red) +
         (0.7152 * green) +
@@ -123,144 +84,15 @@ function calculateProfileSimilarity(firstProfile, secondProfile) {
     );
   }
 
-  const meanDifference = totalDifference / firstProfile.length;
-
-  return Math.max(0, 1 - (meanDifference / 255));
+  return Math.max(
+    0,
+    1 - ((totalDifference / firstProfile.length) / 255),
+  );
 }
 
 
 /* ==========================================
-   Exact Match Verification
-========================================== */
-
-function verifyExactRectangle(
-  firstImageData,
-  secondImageData,
-  firstStartRow,
-  secondStartRow,
-  rowCount,
-) {
-  const bytesPerRow = firstImageData.width * 4;
-
-  const firstStart = firstStartRow * bytesPerRow;
-  const firstEnd = (firstStartRow + rowCount) * bytesPerRow;
-  const secondStart = secondStartRow * bytesPerRow;
-  const secondEnd = (secondStartRow + rowCount) * bytesPerRow;
-
-  const firstPixels = firstImageData.data.subarray(firstStart, firstEnd);
-  const secondPixels = secondImageData.data.subarray(secondStart, secondEnd);
-
-  if (firstPixels.length !== secondPixels.length) {
-    return false;
-  }
-
-  for (let index = 0; index < firstPixels.length; index += 1) {
-    if (firstPixels[index] !== secondPixels[index]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-
-/* ==========================================
-   Exact Vertical Match Detection
-========================================== */
-
-export function detectExactVerticalMatch(
-  firstImageData,
-  secondImageData,
-  { minimumOverlapRows = 32 } = {},
-) {
-  const firstRows = createRowFingerprints(firstImageData);
-  const secondRows = createRowFingerprints(secondImageData);
-
-  let previousMatches = new Uint32Array(secondRows.length + 1);
-  let currentMatches = new Uint32Array(secondRows.length + 1);
-
-  let bestMatch = null;
-
-  for (let firstRow = 0; firstRow < firstRows.length; firstRow += 1) {
-    currentMatches.fill(0);
-
-    for (let secondRow = 0; secondRow < secondRows.length; secondRow += 1) {
-      if (firstRows[firstRow] !== secondRows[secondRow]) {
-        continue;
-      }
-
-      const rowCount = previousMatches[secondRow] + 1;
-      currentMatches[secondRow + 1] = rowCount;
-
-      if (rowCount < minimumOverlapRows) {
-        continue;
-      }
-
-      const firstStartRow = firstRow - rowCount + 1;
-      const secondStartRow = secondRow - rowCount + 1;
-      const verticalOffset = firstStartRow - secondStartRow;
-
-      if (verticalOffset <= 0) {
-        continue;
-      }
-
-      if (
-        bestMatch === null ||
-        rowCount > bestMatch.rowCount ||
-        (
-          rowCount === bestMatch.rowCount &&
-          verticalOffset > bestMatch.verticalOffset
-        )
-      ) {
-        bestMatch = {
-          firstStartRow,
-          secondStartRow,
-          rowCount,
-          verticalOffset,
-          averageSimilarity: 1,
-        };
-      }
-    }
-
-    const swapBuffer = previousMatches;
-    previousMatches = currentMatches;
-    currentMatches = swapBuffer;
-  }
-
-  if (bestMatch === null) {
-    return null;
-  }
-
-  if (
-    !verifyExactRectangle(
-      firstImageData,
-      secondImageData,
-      bestMatch.firstStartRow,
-      bestMatch.secondStartRow,
-      bestMatch.rowCount,
-    )
-  ) {
-    return null;
-  }
-
-  return bestMatch;
-}
-
-export function detectExactVerticalOverlap(
-  firstImageData,
-  secondImageData,
-  options = {},
-) {
-  return detectExactVerticalMatch(
-    firstImageData,
-    secondImageData,
-    options,
-  )?.rowCount ?? 0;
-}
-
-
-/* ==========================================
-   Fixed UI Detection
+   Fixed Edge Diagnostics
 ========================================== */
 
 function estimateFixedEdgeRows(
@@ -276,7 +108,6 @@ function estimateFixedEdgeRows(
     firstProfiles.length,
     secondProfiles.length,
   );
-
   const maximumRows = Math.floor(
     comparableRows * maximumFraction,
   );
@@ -285,10 +116,9 @@ function estimateFixedEdgeRows(
   let similarityTotal = 0;
 
   for (let index = 0; index < maximumRows; index += 1) {
-    const row =
-      edge === "top"
-        ? index
-        : comparableRows - 1 - index;
+    const row = edge === "top"
+      ? index
+      : comparableRows - 1 - index;
 
     const similarity = calculateProfileSimilarity(
       firstProfiles[row],
@@ -305,17 +135,15 @@ function estimateFixedEdgeRows(
 
   return {
     rows: acceptedRows,
-    averageSimilarity:
-      acceptedRows > 0
-        ? similarityTotal / acceptedRows
-        : 0,
-    similarityThreshold,
+    averageSimilarity: acceptedRows > 0
+      ? similarityTotal / acceptedRows
+      : 0,
   };
 }
 
 
 /* ==========================================
-   Approximate Vertical Match Detection
+   Pairwise Overlap Detection
 ========================================== */
 
 function findApproximateVerticalMatch(
@@ -342,7 +170,6 @@ function findApproximateVerticalMatch(
       firstContentStart,
       secondContentStart + offset,
     );
-
     const secondStart = firstStart - offset;
 
     const rowCount = Math.min(
@@ -369,10 +196,9 @@ function findApproximateVerticalMatch(
       sampleCount += 1;
     }
 
-    const averageSimilarity =
-      sampleCount > 0
-        ? similarityTotal / sampleCount
-        : 0;
+    const averageSimilarity = sampleCount > 0
+      ? similarityTotal / sampleCount
+      : 0;
 
     if (
       best === null ||
@@ -384,7 +210,6 @@ function findApproximateVerticalMatch(
         rowCount,
         verticalOffset: offset,
         averageSimilarity,
-        sampleCount,
       };
     }
   }
@@ -392,22 +217,19 @@ function findApproximateVerticalMatch(
   return best;
 }
 
-function analyzeApproximateMatch(
-  firstImageData,
-  secondImageData,
+function analyzePair(
+  firstProfiles,
+  secondProfiles,
   {
     minimumApproximateOverlapRows = 128,
+    minimumApproximateSimilarity = 0.96,
   } = {},
 ) {
-  const firstProfiles = createRowProfiles(firstImageData);
-  const secondProfiles = createRowProfiles(secondImageData);
-
   const fixedTop = estimateFixedEdgeRows(
     firstProfiles,
     secondProfiles,
     { edge: "top" },
   );
-
   const fixedBottom = estimateFixedEdgeRows(
     firstProfiles,
     secondProfiles,
@@ -416,18 +238,16 @@ function analyzeApproximateMatch(
 
   const firstContentStart = fixedTop.rows;
   const secondContentStart = fixedTop.rows;
-
   const firstContentEnd = Math.max(
     firstContentStart,
-    firstImageData.height - fixedBottom.rows,
+    firstProfiles.length - fixedBottom.rows,
   );
-
   const secondContentEnd = Math.max(
     secondContentStart,
-    secondImageData.height - fixedBottom.rows,
+    secondProfiles.length - fixedBottom.rows,
   );
 
-  const approximateMatch = findApproximateVerticalMatch(
+  const match = findApproximateVerticalMatch(
     firstProfiles,
     secondProfiles,
     {
@@ -439,7 +259,16 @@ function analyzeApproximateMatch(
     },
   );
 
+  if (
+    !match ||
+    match.averageSimilarity < minimumApproximateSimilarity
+  ) {
+    throw new Error("OVERLAP_NOT_FOUND");
+  }
+
   return {
+    matchMode: "approximate",
+    ...match,
     fixedTop,
     fixedBottom,
     contentRegion: {
@@ -448,148 +277,101 @@ function analyzeApproximateMatch(
       secondStartRow: secondContentStart,
       secondEndRow: secondContentEnd,
     },
-    approximateMatch,
   };
 }
 
 
 /* ==========================================
-   Diagnostic Analysis
+   Image Roles and Output Segments
 ========================================== */
 
-export function diagnoseImagePair(
-  firstBitmap,
-  secondBitmap,
-  {
-    minimumOverlapRows = 32,
-    minimumApproximateOverlapRows = 128,
-  } = {},
-) {
-  const firstImageData = createImageDataFromBitmap(firstBitmap);
-  const secondImageData = createImageDataFromBitmap(secondBitmap);
+function resolveRole(index, imageCount) {
+  if (index === 0) {
+    return "first";
+  }
 
-  const firstRows = createRowFingerprints(firstImageData);
-  const secondRows = createRowFingerprints(secondImageData);
+  if (index === imageCount - 1) {
+    return "last";
+  }
 
-  let previousMatches = new Uint32Array(secondRows.length + 1);
-  let currentMatches = new Uint32Array(secondRows.length + 1);
+  return "middle";
+}
 
-  let matchingRowPairs = 0;
-  let bestAny = null;
-  let bestPositiveOffset = null;
+function buildSegments(bitmaps, pairMatches) {
+  return bitmaps.map((bitmap, index) => {
+    const role = resolveRole(index, bitmaps.length);
 
-  for (let firstRow = 0; firstRow < firstRows.length; firstRow += 1) {
-    currentMatches.fill(0);
+    let sourceStartRow;
+    let sourceEndRow;
 
-    for (let secondRow = 0; secondRow < secondRows.length; secondRow += 1) {
-      if (firstRows[firstRow] !== secondRows[secondRow]) {
-        continue;
-      }
-
-      matchingRowPairs += 1;
-
-      const rowCount = previousMatches[secondRow] + 1;
-      currentMatches[secondRow + 1] = rowCount;
-
-      const candidate = {
-        firstStartRow: firstRow - rowCount + 1,
-        secondStartRow: secondRow - rowCount + 1,
-        rowCount,
-      };
-
-      candidate.verticalOffset =
-        candidate.firstStartRow - candidate.secondStartRow;
-
-      if (bestAny === null || rowCount > bestAny.rowCount) {
-        bestAny = candidate;
-      }
-
-      if (
-        candidate.verticalOffset > 0 &&
-        (
-          bestPositiveOffset === null ||
-          rowCount > bestPositiveOffset.rowCount
-        )
-      ) {
-        bestPositiveOffset = candidate;
-      }
+    if (role === "first") {
+      sourceStartRow = 0;
+      sourceEndRow = pairMatches[0].firstStartRow;
+    } else if (role === "last") {
+      sourceStartRow = pairMatches[index - 1].secondStartRow;
+      sourceEndRow = bitmap.height;
+    } else {
+      sourceStartRow = pairMatches[index - 1].secondStartRow;
+      sourceEndRow = pairMatches[index].firstStartRow;
     }
 
-    const swapBuffer = previousMatches;
-    previousMatches = currentMatches;
-    currentMatches = swapBuffer;
-  }
+    if (sourceEndRow <= sourceStartRow) {
+      throw new Error("INVALID_SEGMENT_GEOMETRY");
+    }
 
-  const approximateAnalysis = analyzeApproximateMatch(
-    firstImageData,
-    secondImageData,
-    { minimumApproximateOverlapRows },
-  );
-
-  return {
-    firstWidth: firstBitmap.width,
-    firstHeight: firstBitmap.height,
-    secondWidth: secondBitmap.width,
-    secondHeight: secondBitmap.height,
-    minimumOverlapRows,
-    minimumApproximateOverlapRows,
-    matchingRowPairs,
-    bestAny,
-    bestPositiveOffset,
-    fixedTop: approximateAnalysis.fixedTop,
-    fixedBottom: approximateAnalysis.fixedBottom,
-    contentRegion: approximateAnalysis.contentRegion,
-    approximateMatch: approximateAnalysis.approximateMatch,
-  };
+    return {
+      index,
+      role,
+      sourceStartRow,
+      sourceEndRow,
+      rowCount: sourceEndRow - sourceStartRow,
+    };
+  });
 }
 
 
 /* ==========================================
-   Match Selection
+   Sequence Analysis
 ========================================== */
 
-function selectStitchMatch(
-  firstImageData,
-  secondImageData,
-  {
-    minimumOverlapRows = 32,
-    minimumApproximateOverlapRows = 128,
-    minimumApproximateSimilarity = 0.96,
-  } = {},
-) {
-  const exactMatch = detectExactVerticalMatch(
-    firstImageData,
-    secondImageData,
-    { minimumOverlapRows },
-  );
-
-  if (exactMatch) {
-    return {
-      ...exactMatch,
-      matchMode: "exact",
-    };
+export function diagnoseImageSequence(bitmaps, options = {}) {
+  if (bitmaps.length < 2) {
+    throw new Error("NEED_AT_LEAST_TWO_IMAGES");
   }
 
-  const approximateAnalysis = analyzeApproximateMatch(
-    firstImageData,
-    secondImageData,
-    { minimumApproximateOverlapRows },
-  );
+  const width = bitmaps[0].width;
 
-  const approximateMatch = approximateAnalysis.approximateMatch;
-
-  if (
-    !approximateMatch ||
-    approximateMatch.averageSimilarity < minimumApproximateSimilarity
-  ) {
-    return null;
+  if (bitmaps.some((bitmap) => bitmap.width !== width)) {
+    throw new Error("WIDTH_MISMATCH");
   }
+
+  const imageDataList = bitmaps.map(createImageDataFromBitmap);
+  const profilesList = imageDataList.map(createRowProfiles);
+  const pairMatches = [];
+
+  for (let index = 0; index < bitmaps.length - 1; index += 1) {
+    pairMatches.push(
+      analyzePair(
+        profilesList[index],
+        profilesList[index + 1],
+        options,
+      ),
+    );
+  }
+
+  const segments = buildSegments(bitmaps, pairMatches);
 
   return {
-    ...approximateMatch,
-    matchMode: "approximate",
-    fixedTopRows: approximateAnalysis.fixedTop.rows,
-    fixedBottomRows: approximateAnalysis.fixedBottom.rows,
+    width,
+    imageCount: bitmaps.length,
+    images: bitmaps.map((bitmap, index) => ({
+      index,
+      role: resolveRole(index, bitmaps.length),
+      width: bitmap.width,
+      height: bitmap.height,
+      segment: segments[index],
+    })),
+    pairMatches,
   };
 }
 
@@ -598,64 +380,41 @@ function selectStitchMatch(
    Stitch Assembly
 ========================================== */
 
-export async function stitchTwoImages(
-  firstBitmap,
-  secondBitmap,
-  options = {},
-) {
-  if (firstBitmap.width !== secondBitmap.width) {
-    throw new Error("WIDTH_MISMATCH");
-  }
-
-  const firstImageData = createImageDataFromBitmap(firstBitmap);
-  const secondImageData = createImageDataFromBitmap(secondBitmap);
-
-  const match = selectStitchMatch(
-    firstImageData,
-    secondImageData,
-    options,
+export async function stitchImages(bitmaps, options = {}) {
+  const diagnostics = diagnoseImageSequence(bitmaps, options);
+  const outputHeight = diagnostics.images.reduce(
+    (total, image) => total + image.segment.rowCount,
+    0,
   );
 
-  if (match === null) {
-    throw new Error("OVERLAP_NOT_FOUND");
-  }
-
-  const firstSpliceRow = match.firstStartRow + match.rowCount;
-  const secondSpliceRow = match.secondStartRow + match.rowCount;
-
   const outputCanvas = document.createElement("canvas");
-  outputCanvas.width = firstBitmap.width;
-  outputCanvas.height =
-    firstSpliceRow +
-    (secondBitmap.height - secondSpliceRow);
+  outputCanvas.width = diagnostics.width;
+  outputCanvas.height = outputHeight;
 
   const outputContext = outputCanvas.getContext("2d", {
     alpha: true,
   });
 
-  outputContext.drawImage(
-    firstBitmap,
-    0,
-    0,
-    firstBitmap.width,
-    firstSpliceRow,
-    0,
-    0,
-    firstBitmap.width,
-    firstSpliceRow,
-  );
+  let destinationY = 0;
 
-  outputContext.drawImage(
-    secondBitmap,
-    0,
-    secondSpliceRow,
-    secondBitmap.width,
-    secondBitmap.height - secondSpliceRow,
-    0,
-    firstSpliceRow,
-    secondBitmap.width,
-    secondBitmap.height - secondSpliceRow,
-  );
+  for (const image of diagnostics.images) {
+    const bitmap = bitmaps[image.index];
+    const segment = image.segment;
+
+    outputContext.drawImage(
+      bitmap,
+      0,
+      segment.sourceStartRow,
+      bitmap.width,
+      segment.rowCount,
+      0,
+      destinationY,
+      bitmap.width,
+      segment.rowCount,
+    );
+
+    destinationY += segment.rowCount;
+  }
 
   const pngBlob = await new Promise((resolve, reject) => {
     outputCanvas.toBlob((blob) => {
@@ -669,17 +428,8 @@ export async function stitchTwoImages(
 
   return {
     pngBlob,
-    matchMode: match.matchMode,
-    overlapRows: match.rowCount,
-    averageSimilarity: match.averageSimilarity,
-    firstMatchStartRow: match.firstStartRow,
-    secondMatchStartRow: match.secondStartRow,
-    firstSpliceRow,
-    secondSpliceRow,
-    verticalOffset: match.verticalOffset,
-    fixedTopRows: match.fixedTopRows ?? 0,
-    fixedBottomRows: match.fixedBottomRows ?? 0,
     outputWidth: outputCanvas.width,
     outputHeight: outputCanvas.height,
+    diagnostics,
   };
 }
