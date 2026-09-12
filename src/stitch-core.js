@@ -37,13 +37,10 @@ function createImageDataFromBitmap(bitmap) {
 ========================================== */
 
 /*
- * The overlap problem is reduced from "compare every candidate rectangle"
- * to "find the longest row sequence that is a suffix of image A and
- * a prefix of image B".
- *
- * A lightweight 32-bit FNV-1a fingerprint makes that search linear in
- * the number of rows. The final candidate is still verified byte-for-byte,
- * so the fingerprint is only an accelerator, never the source of truth.
+ * Each full-width source row receives a lightweight 32-bit FNV-1a
+ * fingerprint. The fingerprints make candidate discovery practical on a
+ * phone, but they never become the source of truth: the winning rectangle
+ * is verified byte-for-byte before it is used.
  */
 
 function createRowFingerprints(imageData) {
@@ -70,77 +67,25 @@ function createRowFingerprints(imageData) {
 
 
 /* ==========================================
-   Prefix Table
+   Exact Match Verification
 ========================================== */
 
-/*
- * KMP is used here because it gives a deterministic linear-time search.
- * The prefix table represents repeated row patterns without introducing
- * heuristics or lossy image matching.
- */
+function verifyExactRectangle(
+  firstImageData,
+  secondImageData,
+  firstStartRow,
+  secondStartRow,
+  rowCount,
+) {
+  const bytesPerRow = firstImageData.width * 4;
 
-function createPrefixTable(pattern) {
-  const table = new Uint32Array(pattern.length);
-  let matchedLength = 0;
-
-  for (let index = 1; index < pattern.length; index += 1) {
-    while (
-      matchedLength > 0 &&
-      pattern[index] !== pattern[matchedLength]
-    ) {
-      matchedLength = table[matchedLength - 1];
-    }
-
-    if (pattern[index] === pattern[matchedLength]) {
-      matchedLength += 1;
-    }
-
-    table[index] = matchedLength;
-  }
-
-  return table;
-}
-
-
-/* ==========================================
-   Exact Overlap Detection
-========================================== */
-
-function findSuffixPrefixCandidate(firstRows, secondRows) {
-  const prefixTable = createPrefixTable(secondRows);
-  let matchedLength = 0;
-
-  for (const rowFingerprint of firstRows) {
-    if (matchedLength === secondRows.length) {
-      matchedLength = prefixTable[matchedLength - 1];
-    }
-
-    while (
-      matchedLength > 0 &&
-      rowFingerprint !== secondRows[matchedLength]
-    ) {
-      matchedLength = prefixTable[matchedLength - 1];
-    }
-
-    if (rowFingerprint === secondRows[matchedLength]) {
-      matchedLength += 1;
-    }
-  }
-
-  return matchedLength;
-}
-
-function verifyExactOverlap(firstImageData, secondImageData, overlapRows) {
-  const width = firstImageData.width;
-  const bytesPerRow = width * 4;
-
-  const firstStart =
-    (firstImageData.height - overlapRows) * bytesPerRow;
-  const firstEnd = firstImageData.height * bytesPerRow;
-  const secondEnd = overlapRows * bytesPerRow;
+  const firstStart = firstStartRow * bytesPerRow;
+  const firstEnd = (firstStartRow + rowCount) * bytesPerRow;
+  const secondStart = secondStartRow * bytesPerRow;
+  const secondEnd = (secondStartRow + rowCount) * bytesPerRow;
 
   const firstPixels = firstImageData.data.subarray(firstStart, firstEnd);
-  const secondPixels = secondImageData.data.subarray(0, secondEnd);
+  const secondPixels = secondImageData.data.subarray(secondStart, secondEnd);
 
   if (firstPixels.length !== secondPixels.length) {
     return false;
@@ -155,36 +100,121 @@ function verifyExactOverlap(firstImageData, secondImageData, overlapRows) {
   return true;
 }
 
-export function detectExactVerticalOverlap(
+
+/* ==========================================
+   Internal Vertical Match Detection
+========================================== */
+
+/*
+ * Mobile screenshots often contain browser chrome at both ends of the
+ * image. Therefore the shared page area is not necessarily a suffix of the
+ * first screenshot and a prefix of the second screenshot.
+ *
+ * Instead, find the longest common contiguous sequence of full-width rows
+ * anywhere inside both images. A positive vertical offset is required:
+ * the matching content must appear lower in the first screenshot than in
+ * the second screenshot, which is the geometry of a downward scroll.
+ *
+ * Dynamic programming is used with two one-dimensional buffers, keeping
+ * memory proportional to image height rather than height squared.
+ */
+
+export function detectExactVerticalMatch(
   firstImageData,
   secondImageData,
-  { minimumOverlapRows = 16 } = {},
+  { minimumOverlapRows = 32 } = {},
 ) {
   const firstRows = createRowFingerprints(firstImageData);
   const secondRows = createRowFingerprints(secondImageData);
 
-  let candidateRows = findSuffixPrefixCandidate(firstRows, secondRows);
+  let previousMatches = new Uint32Array(secondRows.length + 1);
+  let currentMatches = new Uint32Array(secondRows.length + 1);
 
-  /*
-   * A hash collision is unlikely, but this loop makes collision handling
-   * explicit: if verification fails, fall back through shorter valid
-   * border candidates instead of trusting the hash.
-   */
-  while (candidateRows >= minimumOverlapRows) {
-    if (
-      verifyExactOverlap(
-        firstImageData,
-        secondImageData,
-        candidateRows,
-      )
+  let bestMatch = null;
+
+  for (let firstRow = 0; firstRow < firstRows.length; firstRow += 1) {
+    currentMatches.fill(0);
+
+    for (
+      let secondRow = 0;
+      secondRow < secondRows.length;
+      secondRow += 1
     ) {
-      return candidateRows;
+      if (firstRows[firstRow] !== secondRows[secondRow]) {
+        continue;
+      }
+
+      const rowCount = previousMatches[secondRow] + 1;
+      currentMatches[secondRow + 1] = rowCount;
+
+      if (rowCount < minimumOverlapRows) {
+        continue;
+      }
+
+      const firstStartRow = firstRow - rowCount + 1;
+      const secondStartRow = secondRow - rowCount + 1;
+      const verticalOffset = firstStartRow - secondStartRow;
+
+      if (verticalOffset <= 0) {
+        continue;
+      }
+
+      if (
+        bestMatch === null ||
+        rowCount > bestMatch.rowCount ||
+        (
+          rowCount === bestMatch.rowCount &&
+          verticalOffset > bestMatch.verticalOffset
+        )
+      ) {
+        bestMatch = {
+          firstStartRow,
+          secondStartRow,
+          rowCount,
+          verticalOffset,
+        };
+      }
     }
 
-    candidateRows -= 1;
+    const swapBuffer = previousMatches;
+    previousMatches = currentMatches;
+    currentMatches = swapBuffer;
   }
 
-  return 0;
+  if (bestMatch === null) {
+    return null;
+  }
+
+  if (
+    !verifyExactRectangle(
+      firstImageData,
+      secondImageData,
+      bestMatch.firstStartRow,
+      bestMatch.secondStartRow,
+      bestMatch.rowCount,
+    )
+  ) {
+    return null;
+  }
+
+  return bestMatch;
+}
+
+/*
+ * Kept as a small compatibility wrapper because the first public version
+ * exposed an overlap-row count. New stitching code uses the richer match
+ * object above so it also knows where the shared rectangle begins.
+ */
+export function detectExactVerticalOverlap(
+  firstImageData,
+  secondImageData,
+  options = {},
+) {
+  return detectExactVerticalMatch(
+    firstImageData,
+    secondImageData,
+    options,
+  )?.rowCount ?? 0;
 }
 
 
@@ -193,9 +223,14 @@ export function detectExactVerticalOverlap(
 ========================================== */
 
 /*
- * The output contains only pixels copied from the two source images.
- * Canvas is used as a placement surface, not as a resampling stage:
- * both drawImage calls are made at native size with no scaling.
+ * The splice is made at the end of the verified shared rectangle.
+ * Everything above that point comes from screenshot 1; everything below
+ * it comes from screenshot 2. This naturally removes the first screenshot's
+ * lower browser chrome while retaining the second screenshot's final lower
+ * edge.
+ *
+ * No source pixels are resized, interpolated, or generated. Canvas is only
+ * used as a native-size placement surface and PNG encoder.
  */
 
 export async function stitchTwoImages(
@@ -210,39 +245,53 @@ export async function stitchTwoImages(
   const firstImageData = createImageDataFromBitmap(firstBitmap);
   const secondImageData = createImageDataFromBitmap(secondBitmap);
 
-  const overlapRows = detectExactVerticalOverlap(
+  const match = detectExactVerticalMatch(
     firstImageData,
     secondImageData,
     options,
   );
 
-  if (overlapRows === 0) {
+  if (match === null) {
     throw new Error("OVERLAP_NOT_FOUND");
   }
+
+  const firstSpliceRow =
+    match.firstStartRow + match.rowCount;
+  const secondSpliceRow =
+    match.secondStartRow + match.rowCount;
 
   const outputCanvas = document.createElement("canvas");
   outputCanvas.width = firstBitmap.width;
   outputCanvas.height =
-    firstBitmap.height +
-    secondBitmap.height -
-    overlapRows;
+    firstSpliceRow +
+    (secondBitmap.height - secondSpliceRow);
 
   const outputContext = outputCanvas.getContext("2d", {
     alpha: true,
   });
 
-  outputContext.drawImage(firstBitmap, 0, 0);
+  outputContext.drawImage(
+    firstBitmap,
+    0,
+    0,
+    firstBitmap.width,
+    firstSpliceRow,
+    0,
+    0,
+    firstBitmap.width,
+    firstSpliceRow,
+  );
 
   outputContext.drawImage(
     secondBitmap,
     0,
-    overlapRows,
+    secondSpliceRow,
     secondBitmap.width,
-    secondBitmap.height - overlapRows,
+    secondBitmap.height - secondSpliceRow,
     0,
-    firstBitmap.height,
+    firstSpliceRow,
     secondBitmap.width,
-    secondBitmap.height - overlapRows,
+    secondBitmap.height - secondSpliceRow,
   );
 
   const pngBlob = await new Promise((resolve, reject) => {
@@ -257,7 +306,10 @@ export async function stitchTwoImages(
 
   return {
     pngBlob,
-    overlapRows,
+    overlapRows: match.rowCount,
+    firstMatchStartRow: match.firstStartRow,
+    secondMatchStartRow: match.secondStartRow,
+    verticalOffset: match.verticalOffset,
     outputWidth: outputCanvas.width,
     outputHeight: outputCanvas.height,
   };
