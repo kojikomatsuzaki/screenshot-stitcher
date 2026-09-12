@@ -62,7 +62,7 @@ export function createSidecarYaml({
     "schema_version: 1",
     "generator:",
     '  name: "screenshot-stitcher"',
-    '  version: "0.2.0"',
+    '  version: "0.2.2"',
     "processing:",
     `  mode: ${quoteYamlString(`${matchMode}_vertical_overlap`)}`,
     "  resampling: false",
