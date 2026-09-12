@@ -5,53 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#ffffff">
   <title>Screenshot Stitcher</title>
-  <link rel="stylesheet" href="./style.css?v=0.2.3">
+  <link rel="stylesheet" href="./style.css?v=0.2.3.1">
 </head>
 <body>
   <main class="app-shell">
     <header class="app-header">
       <h1 id="app-title">Screenshot Stitcher</h1>
-      <p id="app-description" class="app-description"></p>
+      <p id="app-description" class="app-description">Images stay in this browser. Nothing is uploaded.</p>
       <p class="status-text" aria-label="debug build version">
-        Debug build: 0.2.3 / 2026-09-12
+        Debug build: 0.2.3.1 / 2026-09-12
       </p>
     </header>
 
     <section class="control-panel" aria-labelledby="app-title">
-      <input
-        id="file-input"
-        class="visually-hidden"
-        type="file"
-        accept="image/png,image/*"
-        multiple
-      >
+      <input id="file-input" class="visually-hidden" type="file" accept="image/png,image/*" multiple>
 
-      <button id="select-files-button" type="button" class="primary-control"></button>
-      <p id="selected-files-status" class="status-text" aria-live="polite"></p>
+      <button id="select-files-button" type="button" class="primary-control">Select Files</button>
+      <p id="selected-files-status" class="status-text" aria-live="polite">No files selected.</p>
 
-      <label id="output-file-name-label" for="output-file-name"></label>
-      <input
-        id="output-file-name"
-        class="text-input"
-        type="text"
-        value="stitched-screenshot"
-        autocomplete="off"
-        autocapitalize="off"
-        spellcheck="false"
-      >
+      <label id="output-file-name-label" for="output-file-name">Output File Name</label>
+      <input id="output-file-name" class="text-input" type="text" value="stitched-screenshot" autocomplete="off" autocapitalize="off" spellcheck="false">
 
-      <button id="stitch-button" type="button" class="primary-control"></button>
-      <button id="reset-button" type="button" class="secondary-control"></button>
+      <button id="stitch-button" type="button" class="primary-control">Stitch</button>
+      <button id="reset-button" type="button" class="secondary-control">Reset</button>
 
       <div id="download-controls" hidden>
-        <button id="download-png-button" type="button" class="primary-control"></button>
-        <button id="download-yaml-button" type="button" class="secondary-control"></button>
+        <button id="download-png-button" type="button" class="primary-control">Save PNG</button>
+        <button id="download-yaml-button" type="button" class="secondary-control">Save YAML</button>
       </div>
 
       <p id="process-status" class="status-text" aria-live="polite"></p>
     </section>
   </main>
 
-  <script type="module" src="./src/app.js?v=0.2.3"></script>
+  <script type="module" src="./src/app.js?v=0.2.3.1"></script>
 </body>
 </html>
