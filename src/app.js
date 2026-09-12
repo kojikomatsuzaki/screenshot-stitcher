@@ -22,19 +22,13 @@ import {
 const applicationState = {
   selectedFiles: [],
   isProcessing: false,
+  generatedFiles: null,
 };
 
 
 /* ==========================================
    Stitch Settings
 ========================================== */
-
-/*
- * These values are intentionally simple while the detector is being tuned
- * against real screenshots. Exact matching remains the first choice. When it
- * fails, approximate matching is accepted only when both the overlap length
- * and the average similarity clear these thresholds.
- */
 
 const stitchSettings = {
   minimumOverlapRows: 32,
@@ -57,6 +51,9 @@ const elements = {
   outputFileName: document.querySelector("#output-file-name"),
   stitchButton: document.querySelector("#stitch-button"),
   resetButton: document.querySelector("#reset-button"),
+  downloadControls: document.querySelector("#download-controls"),
+  downloadPngButton: document.querySelector("#download-png-button"),
+  downloadYamlButton: document.querySelector("#download-yaml-button"),
   processStatus: document.querySelector("#process-status"),
 };
 
@@ -77,6 +74,8 @@ function applyLocalizedText() {
   elements.outputFileNameLabel.textContent = t("outputFileName");
   elements.stitchButton.textContent = t("stitch");
   elements.resetButton.textContent = t("reset");
+  elements.downloadPngButton.textContent = t("savePng");
+  elements.downloadYamlButton.textContent = t("saveYaml");
 
   updateSelectedFilesStatus();
 }
@@ -168,6 +167,12 @@ function normalizeBaseFileName(rawValue) {
    Browser Downloads
 ========================================== */
 
+/*
+ * iOS Safari can suppress or reorder multiple synthetic downloads started
+ * after asynchronous processing. Generated files are therefore kept in
+ * memory and downloaded one at a time from an explicit user tap.
+ */
+
 function downloadBlob(blob, fileName) {
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -179,7 +184,23 @@ function downloadBlob(blob, fileName) {
   anchor.click();
   anchor.remove();
 
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function clearGeneratedFiles() {
+  applicationState.generatedFiles = null;
+  elements.downloadControls.hidden = true;
+}
+
+function showGeneratedFiles({ pngBlob, pngFileName, yamlBlob, yamlFileName }) {
+  applicationState.generatedFiles = {
+    pngBlob,
+    pngFileName,
+    yamlBlob,
+    yamlFileName,
+  };
+
+  elements.downloadControls.hidden = false;
 }
 
 
@@ -193,6 +214,7 @@ async function handleStitch() {
     return;
   }
 
+  clearGeneratedFiles();
   setProcessingState(true);
   elements.processStatus.textContent = t("processing");
 
@@ -242,14 +264,16 @@ async function handleStitch() {
       sourceFiles: applicationState.selectedFiles,
     });
 
-    downloadBlob(result.pngBlob, pngFileName);
+    const yamlBlob = new Blob([yamlText], {
+      type: "text/yaml;charset=utf-8",
+    });
 
-    downloadBlob(
-      new Blob([yamlText], {
-        type: "text/yaml;charset=utf-8",
-      }),
+    showGeneratedFiles({
+      pngBlob: result.pngBlob,
+      pngFileName,
+      yamlBlob,
       yamlFileName,
-    );
+    });
 
     const matchDescription =
       result.matchMode === "exact"
@@ -297,6 +321,7 @@ async function handleStitch() {
 
 function resetApplication() {
   applicationState.selectedFiles = [];
+  clearGeneratedFiles();
 
   elements.fileInput.value = "";
   elements.outputFileName.value = "stitched-screenshot";
@@ -318,12 +343,39 @@ elements.fileInput.addEventListener("change", () => {
   applicationState.selectedFiles =
     Array.from(elements.fileInput.files ?? []);
 
+  clearGeneratedFiles();
   elements.processStatus.textContent = "";
   updateSelectedFilesStatus();
 });
 
 elements.stitchButton.addEventListener("click", handleStitch);
 elements.resetButton.addEventListener("click", resetApplication);
+
+elements.downloadPngButton.addEventListener("click", () => {
+  const generatedFiles = applicationState.generatedFiles;
+
+  if (!generatedFiles) {
+    return;
+  }
+
+  downloadBlob(
+    generatedFiles.pngBlob,
+    generatedFiles.pngFileName,
+  );
+});
+
+elements.downloadYamlButton.addEventListener("click", () => {
+  const generatedFiles = applicationState.generatedFiles;
+
+  if (!generatedFiles) {
+    return;
+  }
+
+  downloadBlob(
+    generatedFiles.yamlBlob,
+    generatedFiles.yamlFileName,
+  );
+});
 
 
 /* ==========================================
