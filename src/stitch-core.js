@@ -105,20 +105,6 @@ function verifyExactRectangle(
    Internal Vertical Match Detection
 ========================================== */
 
-/*
- * Mobile screenshots often contain browser chrome at both ends of the
- * image. Therefore the shared page area is not necessarily a suffix of the
- * first screenshot and a prefix of the second screenshot.
- *
- * Instead, find the longest common contiguous sequence of full-width rows
- * anywhere inside both images. A positive vertical offset is required:
- * the matching content must appear lower in the first screenshot than in
- * the second screenshot, which is the geometry of a downward scroll.
- *
- * Dynamic programming is used with two one-dimensional buffers, keeping
- * memory proportional to image height rather than height squared.
- */
-
 export function detectExactVerticalMatch(
   firstImageData,
   secondImageData,
@@ -200,11 +186,6 @@ export function detectExactVerticalMatch(
   return bestMatch;
 }
 
-/*
- * Kept as a small compatibility wrapper because the first public version
- * exposed an overlap-row count. New stitching code uses the richer match
- * object above so it also knows where the shared rectangle begins.
- */
 export function detectExactVerticalOverlap(
   firstImageData,
   secondImageData,
@@ -219,19 +200,96 @@ export function detectExactVerticalOverlap(
 
 
 /* ==========================================
-   Stitch Assembly
+   Diagnostic Analysis
 ========================================== */
 
 /*
- * The splice is made at the end of the verified shared rectangle.
- * Everything above that point comes from screenshot 1; everything below
- * it comes from screenshot 2. This naturally removes the first screenshot's
- * lower browser chrome while retaining the second screenshot's final lower
- * edge.
+ * This diagnostic path intentionally reports what the exact matcher sees
+ * without changing the production matching rule. It lets us distinguish
+ * three different failures on a real phone:
  *
- * No source pixels are resized, interpolated, or generated. Canvas is only
- * used as a native-size placement surface and PNG encoder.
+ * 1. no full-width rows are identical at all;
+ * 2. identical rows exist, but only in a very short run;
+ * 3. a long run exists, but its geometry does not look like a downward
+ *    scroll (positive vertical offset).
  */
+
+export function diagnoseImagePair(
+  firstBitmap,
+  secondBitmap,
+  { minimumOverlapRows = 32 } = {},
+) {
+  const firstImageData = createImageDataFromBitmap(firstBitmap);
+  const secondImageData = createImageDataFromBitmap(secondBitmap);
+
+  const firstRows = createRowFingerprints(firstImageData);
+  const secondRows = createRowFingerprints(secondImageData);
+
+  let previousMatches = new Uint32Array(secondRows.length + 1);
+  let currentMatches = new Uint32Array(secondRows.length + 1);
+
+  let matchingRowPairs = 0;
+  let bestAny = null;
+  let bestPositiveOffset = null;
+
+  for (let firstRow = 0; firstRow < firstRows.length; firstRow += 1) {
+    currentMatches.fill(0);
+
+    for (let secondRow = 0; secondRow < secondRows.length; secondRow += 1) {
+      if (firstRows[firstRow] !== secondRows[secondRow]) {
+        continue;
+      }
+
+      matchingRowPairs += 1;
+
+      const rowCount = previousMatches[secondRow] + 1;
+      currentMatches[secondRow + 1] = rowCount;
+
+      const candidate = {
+        firstStartRow: firstRow - rowCount + 1,
+        secondStartRow: secondRow - rowCount + 1,
+        rowCount,
+      };
+
+      candidate.verticalOffset =
+        candidate.firstStartRow - candidate.secondStartRow;
+
+      if (bestAny === null || rowCount > bestAny.rowCount) {
+        bestAny = candidate;
+      }
+
+      if (
+        candidate.verticalOffset > 0 &&
+        (
+          bestPositiveOffset === null ||
+          rowCount > bestPositiveOffset.rowCount
+        )
+      ) {
+        bestPositiveOffset = candidate;
+      }
+    }
+
+    const swapBuffer = previousMatches;
+    previousMatches = currentMatches;
+    currentMatches = swapBuffer;
+  }
+
+  return {
+    firstWidth: firstBitmap.width,
+    firstHeight: firstBitmap.height,
+    secondWidth: secondBitmap.width,
+    secondHeight: secondBitmap.height,
+    minimumOverlapRows,
+    matchingRowPairs,
+    bestAny,
+    bestPositiveOffset,
+  };
+}
+
+
+/* ==========================================
+   Stitch Assembly
+========================================== */
 
 export async function stitchTwoImages(
   firstBitmap,
