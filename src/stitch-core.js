@@ -59,13 +59,13 @@ function createRowFingerprints(imageData) {
 ========================================== */
 
 /*
- * Exact pixel equality is useful for final verification, but screenshots
- * often contain small changes in status bars and app chrome. For diagnosis,
- * each row is also represented by a low-resolution luminance profile.
+ * Screenshots that look identical to a person are not always pixel-identical.
+ * Text antialiasing, WebView rendering, dynamic status information and other
+ * small changes can make exact matching fail.
  *
- * This profile deliberately ignores tiny local changes while preserving the
- * broad visual structure of the row. It is used only for diagnostics in the
- * current version; production stitching still uses exact verification.
+ * Each row is therefore reduced to a small luminance profile. The profile is
+ * deliberately coarse: it keeps the broad structure of the row while
+ * ignoring tiny pixel-level differences.
  */
 
 function createRowProfiles(
@@ -123,8 +123,7 @@ function calculateProfileSimilarity(firstProfile, secondProfile) {
     );
   }
 
-  const meanDifference =
-    totalDifference / firstProfile.length;
+  const meanDifference = totalDifference / firstProfile.length;
 
   return Math.max(0, 1 - (meanDifference / 255));
 }
@@ -218,6 +217,7 @@ export function detectExactVerticalMatch(
           secondStartRow,
           rowCount,
           verticalOffset,
+          averageSimilarity: 1,
         };
       }
     }
@@ -260,7 +260,7 @@ export function detectExactVerticalOverlap(
 
 
 /* ==========================================
-   Fixed UI Diagnostics
+   Fixed UI Detection
 ========================================== */
 
 function estimateFixedEdgeRows(
@@ -315,7 +315,7 @@ function estimateFixedEdgeRows(
 
 
 /* ==========================================
-   Approximate Overlap Diagnostics
+   Approximate Vertical Match Detection
 ========================================== */
 
 function findApproximateVerticalMatch(
@@ -326,7 +326,7 @@ function findApproximateVerticalMatch(
     firstContentEnd,
     secondContentStart,
     secondContentEnd,
-    minimumOverlapRows = 64,
+    minimumOverlapRows = 128,
     verticalSampleStep = 4,
   },
 ) {
@@ -392,6 +392,66 @@ function findApproximateVerticalMatch(
   return best;
 }
 
+function analyzeApproximateMatch(
+  firstImageData,
+  secondImageData,
+  {
+    minimumApproximateOverlapRows = 128,
+  } = {},
+) {
+  const firstProfiles = createRowProfiles(firstImageData);
+  const secondProfiles = createRowProfiles(secondImageData);
+
+  const fixedTop = estimateFixedEdgeRows(
+    firstProfiles,
+    secondProfiles,
+    { edge: "top" },
+  );
+
+  const fixedBottom = estimateFixedEdgeRows(
+    firstProfiles,
+    secondProfiles,
+    { edge: "bottom" },
+  );
+
+  const firstContentStart = fixedTop.rows;
+  const secondContentStart = fixedTop.rows;
+
+  const firstContentEnd = Math.max(
+    firstContentStart,
+    firstImageData.height - fixedBottom.rows,
+  );
+
+  const secondContentEnd = Math.max(
+    secondContentStart,
+    secondImageData.height - fixedBottom.rows,
+  );
+
+  const approximateMatch = findApproximateVerticalMatch(
+    firstProfiles,
+    secondProfiles,
+    {
+      firstContentStart,
+      firstContentEnd,
+      secondContentStart,
+      secondContentEnd,
+      minimumOverlapRows: minimumApproximateOverlapRows,
+    },
+  );
+
+  return {
+    fixedTop,
+    fixedBottom,
+    contentRegion: {
+      firstStartRow: firstContentStart,
+      firstEndRow: firstContentEnd,
+      secondStartRow: secondContentStart,
+      secondEndRow: secondContentEnd,
+    },
+    approximateMatch,
+  };
+}
+
 
 /* ==========================================
    Diagnostic Analysis
@@ -400,16 +460,16 @@ function findApproximateVerticalMatch(
 export function diagnoseImagePair(
   firstBitmap,
   secondBitmap,
-  { minimumOverlapRows = 32 } = {},
+  {
+    minimumOverlapRows = 32,
+    minimumApproximateOverlapRows = 128,
+  } = {},
 ) {
   const firstImageData = createImageDataFromBitmap(firstBitmap);
   const secondImageData = createImageDataFromBitmap(secondBitmap);
 
   const firstRows = createRowFingerprints(firstImageData);
   const secondRows = createRowFingerprints(secondImageData);
-
-  const firstProfiles = createRowProfiles(firstImageData);
-  const secondProfiles = createRowProfiles(secondImageData);
 
   let previousMatches = new Uint32Array(secondRows.length + 1);
   let currentMatches = new Uint32Array(secondRows.length + 1);
@@ -460,43 +520,10 @@ export function diagnoseImagePair(
     currentMatches = swapBuffer;
   }
 
-  const fixedTop = estimateFixedEdgeRows(
-    firstProfiles,
-    secondProfiles,
-    {
-      edge: "top",
-    },
-  );
-
-  const fixedBottom = estimateFixedEdgeRows(
-    firstProfiles,
-    secondProfiles,
-    {
-      edge: "bottom",
-    },
-  );
-
-  const firstContentStart = fixedTop.rows;
-  const secondContentStart = fixedTop.rows;
-  const firstContentEnd = Math.max(
-    firstContentStart,
-    firstBitmap.height - fixedBottom.rows,
-  );
-  const secondContentEnd = Math.max(
-    secondContentStart,
-    secondBitmap.height - fixedBottom.rows,
-  );
-
-  const approximateMatch = findApproximateVerticalMatch(
-    firstProfiles,
-    secondProfiles,
-    {
-      firstContentStart,
-      firstContentEnd,
-      secondContentStart,
-      secondContentEnd,
-      minimumOverlapRows: Math.max(64, minimumOverlapRows),
-    },
+  const approximateAnalysis = analyzeApproximateMatch(
+    firstImageData,
+    secondImageData,
+    { minimumApproximateOverlapRows },
   );
 
   return {
@@ -505,18 +532,64 @@ export function diagnoseImagePair(
     secondWidth: secondBitmap.width,
     secondHeight: secondBitmap.height,
     minimumOverlapRows,
+    minimumApproximateOverlapRows,
     matchingRowPairs,
     bestAny,
     bestPositiveOffset,
-    fixedTop,
-    fixedBottom,
-    contentRegion: {
-      firstStartRow: firstContentStart,
-      firstEndRow: firstContentEnd,
-      secondStartRow: secondContentStart,
-      secondEndRow: secondContentEnd,
-    },
-    approximateMatch,
+    fixedTop: approximateAnalysis.fixedTop,
+    fixedBottom: approximateAnalysis.fixedBottom,
+    contentRegion: approximateAnalysis.contentRegion,
+    approximateMatch: approximateAnalysis.approximateMatch,
+  };
+}
+
+
+/* ==========================================
+   Match Selection
+========================================== */
+
+function selectStitchMatch(
+  firstImageData,
+  secondImageData,
+  {
+    minimumOverlapRows = 32,
+    minimumApproximateOverlapRows = 128,
+    minimumApproximateSimilarity = 0.96,
+  } = {},
+) {
+  const exactMatch = detectExactVerticalMatch(
+    firstImageData,
+    secondImageData,
+    { minimumOverlapRows },
+  );
+
+  if (exactMatch) {
+    return {
+      ...exactMatch,
+      matchMode: "exact",
+    };
+  }
+
+  const approximateAnalysis = analyzeApproximateMatch(
+    firstImageData,
+    secondImageData,
+    { minimumApproximateOverlapRows },
+  );
+
+  const approximateMatch = approximateAnalysis.approximateMatch;
+
+  if (
+    !approximateMatch ||
+    approximateMatch.averageSimilarity < minimumApproximateSimilarity
+  ) {
+    return null;
+  }
+
+  return {
+    ...approximateMatch,
+    matchMode: "approximate",
+    fixedTopRows: approximateAnalysis.fixedTop.rows,
+    fixedBottomRows: approximateAnalysis.fixedBottom.rows,
   };
 }
 
@@ -537,7 +610,7 @@ export async function stitchTwoImages(
   const firstImageData = createImageDataFromBitmap(firstBitmap);
   const secondImageData = createImageDataFromBitmap(secondBitmap);
 
-  const match = detectExactVerticalMatch(
+  const match = selectStitchMatch(
     firstImageData,
     secondImageData,
     options,
@@ -547,10 +620,8 @@ export async function stitchTwoImages(
     throw new Error("OVERLAP_NOT_FOUND");
   }
 
-  const firstSpliceRow =
-    match.firstStartRow + match.rowCount;
-  const secondSpliceRow =
-    match.secondStartRow + match.rowCount;
+  const firstSpliceRow = match.firstStartRow + match.rowCount;
+  const secondSpliceRow = match.secondStartRow + match.rowCount;
 
   const outputCanvas = document.createElement("canvas");
   outputCanvas.width = firstBitmap.width;
@@ -598,10 +669,16 @@ export async function stitchTwoImages(
 
   return {
     pngBlob,
+    matchMode: match.matchMode,
     overlapRows: match.rowCount,
+    averageSimilarity: match.averageSimilarity,
     firstMatchStartRow: match.firstStartRow,
     secondMatchStartRow: match.secondStartRow,
+    firstSpliceRow,
+    secondSpliceRow,
     verticalOffset: match.verticalOffset,
+    fixedTopRows: match.fixedTopRows ?? 0,
+    fixedBottomRows: match.fixedBottomRows ?? 0,
     outputWidth: outputCanvas.width,
     outputHeight: outputCanvas.height,
   };
