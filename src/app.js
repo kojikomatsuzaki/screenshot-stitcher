@@ -81,28 +81,53 @@ function setProcessingState(isProcessing) {
   elements.outputFileName.disabled = isProcessing;
 }
 
+function formatPercentage(value) {
+  return `${(value * 100).toFixed(2)}%`;
+}
+
 function formatMatch(match) {
   if (!match) {
     return "none";
   }
 
-  return [
+  const parts = [
     `${match.rowCount} rows`,
     `firstStart=${match.firstStartRow}`,
     `secondStart=${match.secondStartRow}`,
     `offset=${match.verticalOffset}`,
-  ].join(", ");
+  ];
+
+  if (typeof match.averageSimilarity === "number") {
+    parts.push(
+      `similarity=${formatPercentage(match.averageSimilarity)}`,
+    );
+  }
+
+  return parts.join(", ");
 }
 
 function formatDiagnosticReport(diagnostics) {
   return [
-    "[debug] exact-overlap diagnostics",
+    "[debug] screenshot structure diagnostics",
     `image 1: ${diagnostics.firstWidth} × ${diagnostics.firstHeight}`,
     `image 2: ${diagnostics.secondWidth} × ${diagnostics.secondHeight}`,
-    `minimum overlap: ${diagnostics.minimumOverlapRows} rows`,
-    `matching row pairs: ${diagnostics.matchingRowPairs}`,
-    `best match (any geometry): ${formatMatch(diagnostics.bestAny)}`,
-    `best match (positive offset): ${formatMatch(diagnostics.bestPositiveOffset)}`,
+    "",
+    "fixed UI candidates:",
+    `  top: ${diagnostics.fixedTop.rows} rows, similarity=${formatPercentage(diagnostics.fixedTop.averageSimilarity)}`,
+    `  bottom: ${diagnostics.fixedBottom.rows} rows, similarity=${formatPercentage(diagnostics.fixedBottom.averageSimilarity)}`,
+    "",
+    "content search region:",
+    `  image 1: y=${diagnostics.contentRegion.firstStartRow}–${diagnostics.contentRegion.firstEndRow}`,
+    `  image 2: y=${diagnostics.contentRegion.secondStartRow}–${diagnostics.contentRegion.secondEndRow}`,
+    "",
+    "exact matching:",
+    `  minimum overlap: ${diagnostics.minimumOverlapRows} rows`,
+    `  matching row pairs: ${diagnostics.matchingRowPairs}`,
+    `  best (any geometry): ${formatMatch(diagnostics.bestAny)}`,
+    `  best (positive offset): ${formatMatch(diagnostics.bestPositiveOffset)}`,
+    "",
+    "approximate matching after fixed-UI exclusion:",
+    `  best: ${formatMatch(diagnostics.approximateMatch)}`,
   ].join("\n");
 }
 
@@ -155,10 +180,19 @@ async function handleStitch() {
 
   let firstBitmap;
   let secondBitmap;
+  let diagnostics;
 
   try {
     firstBitmap = await decodeImageFile(firstFile);
     secondBitmap = await decodeImageFile(secondFile);
+
+    diagnostics = diagnoseImagePair(
+      firstBitmap,
+      secondBitmap,
+      {
+        minimumOverlapRows: 32,
+      },
+    );
 
     const result = await stitchTwoImages(
       firstBitmap,
@@ -167,9 +201,6 @@ async function handleStitch() {
         minimumOverlapRows: 32,
       },
     );
-
-    elements.processStatus.textContent =
-      t("overlapFound", result.overlapRows);
 
     const baseFileName =
       normalizeBaseFileName(elements.outputFileName.value);
@@ -198,7 +229,12 @@ async function handleStitch() {
       yamlFileName,
     );
 
-    elements.processStatus.textContent = t("complete");
+    elements.processStatus.textContent = [
+      t("complete"),
+      `exact overlap used: ${result.overlapRows} rows`,
+      "",
+      formatDiagnosticReport(diagnostics),
+    ].join("\n");
   } catch (error) {
     console.error(error);
 
@@ -206,17 +242,8 @@ async function handleStitch() {
       elements.processStatus.textContent = t("widthMismatch");
     } else if (
       error.message === "OVERLAP_NOT_FOUND" &&
-      firstBitmap &&
-      secondBitmap
+      diagnostics
     ) {
-      const diagnostics = diagnoseImagePair(
-        firstBitmap,
-        secondBitmap,
-        {
-          minimumOverlapRows: 32,
-        },
-      );
-
       elements.processStatus.textContent = [
         t("overlapNotFound"),
         "",
